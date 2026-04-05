@@ -1,170 +1,215 @@
 """
-Script to translate the Central Bank of Russia exchange rates PDF
-from Russian to English and produce a translated PDF output.
+Translate the Central Bank of Russia exchange rates PDF from Russian to English,
+preserving the original layout, colors, font sizes, and graphical elements.
+
+Uses PyMuPDF to redact Russian text in-place and overlay English translations
+at the exact same positions.
 """
 
-from fpdf import FPDF
+import fitz
 
-FONT_DIR = "/usr/share/fonts/truetype/dejavu/"
+INPUT_PDF = "/workspace/original.pdf"
+OUTPUT_PDF = "/workspace/exchange_rates_translated.pdf"
+FONT_REGULAR = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
-ALL_CURRENCIES = [
-    ("036", "AUD", "1", "Australian Dollar", "56.6632"),
-    ("944", "AZN", "1", "Azerbaijani Manat", "47.1914"),
-    ("012", "DZD", "100", "Algerian Dinars", "60.5958"),
-    ("051", "AMD", "100", "Armenian Drams", "21.2495"),
-    ("764", "THB", "10", "Thai Bahts", "24.8892"),
-    ("048", "BHD", "1", "Bahraini Dinar", "213.3193"),
-    ("933", "BYN", "1", "Belarusian Ruble", "27.3508"),
-    ("068", "BOB", "1", "Boliviano", "11.6100"),
-    ("986", "BRL", "1", "Brazilian Real", "15.4137"),
-    ("410", "KRW", "1000", "South Korean Won", "54.2137"),
-    ("344", "HKD", "1", "Hong Kong Dollar", "10.2682"),
-    ("980", "UAH", "10", "Ukrainian Hryvnias", "18.1655"),
-    ("208", "DKK", "1", "Danish Krone", "12.3975"),
-    ("784", "AED", "1", "UAE Dirham", "21.8449"),
-    ("840", "USD", "1", "US Dollar", "80.2254"),
-    ("704", "VND", "10000", "Vietnamese Dongs", "32.0069"),
-    ("978", "EUR", "1", "Euro", "91.9847"),
-    ("818", "EGP", "10", "Egyptian Pounds", "15.2949"),
-    ("985", "PLN", "1", "Polish Zloty", "21.5214"),
-    ("392", "JPY", "100", "Japanese Yen", "50.3928"),
-    ("356", "INR", "100", "Indian Rupees", "86.7860"),
-    ("364", "IRR", "1000000", "Iranian Rials", "58.8139"),
-    ("124", "CAD", "1", "Canadian Dollar", "58.9156"),
-    ("634", "QAR", "1", "Qatari Riyal", "22.0399"),
-    ("192", "CUP", "10", "Cuban Pesos", "33.4273"),
-    ("104", "MMK", "1000", "Myanmar Kyats", "38.2026"),
-    ("981", "GEL", "1", "Georgian Lari", "29.3640"),
-    ("498", "MDL", "10", "Moldovan Lei", "46.2690"),
-    ("566", "NGN", "1000", "Nigerian Nairas", "58.4944"),
-    ("554", "NZD", "1", "New Zealand Dollar", "46.9800"),
-    ("934", "TMT", "1", "Turkmenistani New Manat", "22.9215"),
-    ("578", "NOK", "10", "Norwegian Kroner", "83.0259"),
-    ("512", "OMR", "1", "Omani Rial", "208.6486"),
-    ("946", "RON", "1", "Romanian Leu", "18.0570"),
-    ("360", "IDR", "10000", "Indonesian Rupiahs", "47.4735"),
-    ("710", "ZAR", "10", "South African Rands", "47.5004"),
-    ("682", "SAR", "1", "Saudi Riyal", "21.3934"),
-    ("960", "XDR", "1", "SDR (Special Drawing Rights)", "109.3721"),
-    ("941", "RSD", "100", "Serbian Dinars", "78.5899"),
-    ("702", "SGD", "1", "Singapore Dollar", "62.7300"),
-    ("417", "KGS", "100", "Kyrgyzstani Soms", "91.7389"),
-    ("972", "TJS", "10", "Tajikistani Somonis", "83.4542"),
-    ("050", "BDT", "100", "Bangladeshi Takas", "65.3385"),
-    ("398", "KZT", "100", "Kazakhstani Tenges", "16.3166"),
-    ("496", "MNT", "1000", "Mongolian Tugriks", "22.4954"),
-    ("949", "TRY", "10", "Turkish Liras", "18.2038"),
-    ("860", "UZS", "10000", "Uzbekistani Sums", "66.4028"),
-    ("348", "HUF", "100", "Hungarian Forints", "23.4187"),
-    ("826", "GBP", "1", "British Pound Sterling", "107.0929"),
-    ("203", "CZK", "10", "Czech Korunas", "37.9209"),
-    ("752", "SEK", "10", "Swedish Kronor", "86.4886"),
-    ("756", "CHF", "1", "Swiss Franc", "101.7701"),
-    ("230", "ETB", "100", "Ethiopian Birrs", "51.1763"),
-    ("156", "CNY", "1", "Chinese Yuan", "11.6504"),
-]
+TRANSLATIONS: dict[str, str] = {
+    # Header
+    "107016, Москва, ул. Неглинная, д. 12, к. В, Банк России":
+        "107016, Moscow, Neglinnaya St., 12, Bldg. B, Bank of Russia",
+    "8 800 300-30-00": "8 800 300-30-00",
+    "www.cbr.ru": "www.cbr.ru",
 
-COL_WIDTHS = [18, 18, 18, 80, 36]
-HEADERS = ["Num. Code", "Alpha Code", "Units", "Currency", "Rate"]
-ROW_H = 5.0
-FONT_SZ = 7.0
-PAGE_BOTTOM = 280  # leave room for footer
+    # Title (two lines)
+    "Официальные курсы валют на заданную":
+        "Official Currency Exchange Rates",
+    "дату, устанавливаемые ежедневно":
+        "for a Given Date, Set Daily",
 
+    # Description (three lines)
+    "Центральный банк Российской Федерации установил с 14.03.2026 следующие":
+        "The Central Bank of the Russian Federation has established the following",
+    "курсы иностранных валют к рублю Российской Федерации без обязательств":
+        "foreign currency exchange rates against the Russian Ruble effective from",
+    "Банка России покупать или продавать указанные валюты по данному курсу":
+        "14.03.2026, without obligation to buy or sell at the given rate.",
 
-class TranslatedPDF(FPDF):
-    def header(self):
-        self.set_font("DejaVu", "", 7)
-        self.set_text_color(100, 100, 100)
-        self.cell(0, 4, "107016, Moscow, Neglinnaya St., 12, Bldg. B, Bank of Russia",
-                  align="L", new_x="LMARGIN", new_y="NEXT")
-        self.cell(60, 4, "8 800 300-30-00", new_x="RIGHT")
-        self.cell(0, 4, "www.cbr.ru", align="R", new_x="LMARGIN", new_y="NEXT")
-        self.set_text_color(0, 0, 0)
-        self.ln(2)
+    "15.03.2026": "15.03.2026",
 
-    def footer(self):
-        self.set_y(-12)
-        self.set_font("DejaVu", "", 7)
-        self.set_text_color(128, 128, 128)
-        self.cell(0, 8, f"Page {self.page_no()} of {self.alias_nb_pages()}", align="C")
+    # Table headers
+    "Цифр. код": "Num. Code",
+    "Букв. код": "Alpha Code",
+    "Единиц": "Units",
+    "Валюта": "Currency",
+    "Курс": "Rate",
 
+    # Page 1 currencies
+    "Австралийский доллар": "Australian Dollar",
+    "Азербайджанский манат": "Azerbaijani Manat",
+    "Алжирских динаров": "Algerian Dinars",
+    "Армянских драмов": "Armenian Drams",
+    "Батов": "Thai Bahts",
+    "Бахрейнский динар": "Bahraini Dinar",
+    "Белорусский рубль": "Belarusian Ruble",
+    "Боливиано": "Boliviano",
+    "Бразильский реал": "Brazilian Real",
+    "Вон": "South Korean Won",
+    "Гонконгский доллар": "Hong Kong Dollar",
+    "Гривен": "Ukrainian Hryvnias",
+    "Датская крона": "Danish Krone",
+    "Дирхам ОАЭ": "UAE Dirham",
+    "Доллар США": "US Dollar",
+    "Донгов": "Vietnamese Dongs",
+    "Евро": "Euro",
+    "Египетских фунтов": "Egyptian Pounds",
+    "Злотый": "Polish Zloty",
+    "Иен": "Japanese Yen",
+    "Индийских рупий": "Indian Rupees",
+    "Иранских риалов": "Iranian Rials",
+    "Канадский доллар": "Canadian Dollar",
+    "Катарский риал": "Qatari Riyal",
+    "Кубинских песо": "Cuban Pesos",
+    "Кьятов": "Myanmar Kyats",
+    "Лари": "Georgian Lari",
+    "Молдавских леев": "Moldovan Lei",
+    "Найр": "Nigerian Nairas",
+    "Новозеландский доллар": "New Zealand Dollar",
+    "Новый туркменский манат": "Turkmen New Manat",
+    "Норвежских крон": "Norwegian Kroner",
+    "Оманский риал": "Omani Rial",
+    "Румынский лей": "Romanian Leu",
+    "Рупий": "Indonesian Rupiahs",
+    "Рэндов": "South African Rands",
+    "Саудовский риял": "Saudi Riyal",
 
-def _draw_table_header(pdf: FPDF) -> None:
-    pdf.set_font("DejaVu", "B", FONT_SZ)
-    pdf.set_fill_color(60, 80, 130)
-    pdf.set_text_color(255, 255, 255)
-    for i, h in enumerate(HEADERS):
-        align = "R" if i == 4 else ("C" if i < 3 else "L")
-        pdf.cell(COL_WIDTHS[i], ROW_H + 0.5, h, border=1, align=align, fill=True)
-    pdf.ln()
-    pdf.set_text_color(0, 0, 0)
+    # Page 2 currencies
+    "СДР (специальные права заимствования)": "SDR (Special Drawing Rights)",
+    "Сербских динаров": "Serbian Dinars",
+    "Сингапурский доллар": "Singapore Dollar",
+    "Сомов": "Kyrgyzstani Soms",
+    "Сомони": "Tajikistani Somonis",
+    "Так": "Bangladeshi Takas",
+    "Тенге": "Kazakhstani Tenges",
+    "Тугриков": "Mongolian Tugriks",
+    "Турецких лир": "Turkish Liras",
+    "Узбекских сумов": "Uzbekistani Sums",
+    "Форинтов": "Hungarian Forints",
+    "Фунт стерлингов": "British Pound Sterling",
+    "Чешских крон": "Czech Korunas",
+    "Шведских крон": "Swedish Kronor",
+    "Швейцарский франк": "Swiss Franc",
+    "Эфиопских быров": "Ethiopian Birrs",
+    "Юань": "Chinese Yuan",
 
+    # Footer
+    "Последнее обновление страницы: 13.03.2026":
+        "Last page update: 13.03.2026",
+}
 
-def _draw_table_row(pdf: FPDF, row: tuple[str, ...], fill: bool) -> None:
-    pdf.set_font("DejaVu", "", FONT_SZ)
-    if fill:
-        pdf.set_fill_color(235, 240, 250)
-    else:
-        pdf.set_fill_color(255, 255, 255)
-    for i, val in enumerate(row):
-        align = "R" if i == 4 else ("C" if i < 3 else "L")
-        pdf.cell(COL_WIDTHS[i], ROW_H, val, border=1, align=align, fill=True)
-    pdf.ln()
+TITLE_FONT = "fa46vz2-2gs-exs-qwfdd9lc"
+DATA_FONT = "f73y1si-160h-cqg-16ef6vm"
+
+CURRENCY_COL_RIGHT = 478.0
 
 
-def build_pdf(output_path: str) -> None:
-    pdf = TranslatedPDF(orientation="P", unit="mm", format="A4")
-    pdf.set_auto_page_break(auto=False)
+def hex_to_tuple(color_int: int) -> tuple[float, float, float]:
+    r = ((color_int >> 16) & 0xFF) / 255.0
+    g = ((color_int >> 8) & 0xFF) / 255.0
+    b = (color_int & 0xFF) / 255.0
+    return (r, g, b)
 
-    pdf.add_font("DejaVu", "", FONT_DIR + "DejaVuSans.ttf")
-    pdf.add_font("DejaVu", "B", FONT_DIR + "DejaVuSans-Bold.ttf")
 
-    pdf.add_page()
+def get_row_bg_color(page, y_center: float) -> tuple[float, float, float] | None:
+    """Sample the background color of a table row from the page's drawings."""
+    for d in page.get_drawings():
+        drect = d["rect"]
+        fill = d.get("fill")
+        if fill and drect.y0 <= y_center <= drect.y1:
+            if drect.x0 < 240 and drect.x1 > 400:
+                if fill != (1.0, 1.0, 1.0):
+                    return fill
+    return None
 
-    # Title
-    pdf.set_font("DejaVu", "B", 11)
-    pdf.cell(0, 6, "Official Exchange Rates for a Given Date, Set Daily",
-             align="C", new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(2)
 
-    # Description
-    pdf.set_font("DejaVu", "", 7.5)
-    pdf.multi_cell(
-        0, 4,
-        "The Central Bank of the Russian Federation has established the following "
-        "foreign currency exchange rates against the Russian Ruble effective from "
-        "14.03.2026, without any obligation of the Bank of Russia to buy or sell "
-        "the specified currencies at the given rate.",
-        align="J",
-    )
-    pdf.ln(1)
+def translate_pdf() -> None:
+    doc = fitz.open(INPUT_PDF)
+    font_regular_obj = fitz.Font(fontfile=FONT_REGULAR)
+    font_bold_obj = fitz.Font(fontfile=FONT_BOLD)
 
-    # Date
-    pdf.set_font("DejaVu", "B", 9)
-    pdf.cell(0, 5, "15.03.2026", align="R", new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(1)
+    for page_idx in range(len(doc)):
+        page = doc[page_idx]
 
-    # Table
-    _draw_table_header(pdf)
+        blocks = page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE)
+        replacements: list[tuple[dict, str]] = []
 
-    fill = False
-    for row in ALL_CURRENCIES:
-        if pdf.get_y() + ROW_H > PAGE_BOTTOM:
-            pdf.add_page()
-            _draw_table_header(pdf)
-            fill = False
-        _draw_table_row(pdf, row, fill)
-        fill = not fill
+        for block in blocks["blocks"]:
+            if "lines" not in block:
+                continue
+            for line in block["lines"]:
+                for span in line["spans"]:
+                    text = span["text"].strip()
+                    if text and text in TRANSLATIONS:
+                        replacements.append((span, TRANSLATIONS[text]))
 
-    # "Last page update" note at the bottom of the last page
-    pdf.ln(3)
-    pdf.set_font("DejaVu", "", 7)
-    pdf.set_text_color(128, 128, 128)
-    pdf.cell(0, 4, "Last page update: 13.03.2026", align="L")
+        for span, en_text in replacements:
+            bbox = span["bbox"]
+            is_data = span["font"] == DATA_FONT
+            measure_font = font_regular_obj if is_data else font_bold_obj
+            font_size = span["size"]
 
-    pdf.output(output_path)
-    print(f"Translated PDF saved to: {output_path}")
+            en_width = measure_font.text_length(en_text, fontsize=font_size)
+            ru_width = bbox[2] - bbox[0]
+            redact_right = bbox[0] + max(en_width, ru_width) + 2
+
+            is_currency_cell = (
+                abs(bbox[0] - 234.1) < 1.0
+                and is_data
+                and font_size < 10
+            )
+            if is_currency_cell:
+                redact_right = min(redact_right, CURRENCY_COL_RIGHT)
+
+            y_center = (bbox[1] + bbox[3]) / 2.0
+            bg = get_row_bg_color(page, y_center)
+            fill_color = bg if bg else (1, 1, 1)
+
+            redact_rect = fitz.Rect(bbox[0], bbox[1], redact_right, bbox[3])
+            page.add_redact_annot(redact_rect, text="", fill=fill_color)
+
+        page.apply_redactions()
+
+        for span, en_text in replacements:
+            bbox = span["bbox"]
+            font_size = span["size"]
+            color = hex_to_tuple(span["color"])
+
+            is_data = span["font"] == DATA_FONT
+            font_file = FONT_REGULAR if is_data else FONT_BOLD
+            font_name = "DjVu" if is_data else "DjVuB"
+            measure_font = font_regular_obj if is_data else font_bold_obj
+
+            is_title = span["font"] == TITLE_FONT
+            if is_title:
+                max_width = 530.0 - bbox[0]
+                text_width = measure_font.text_length(en_text, fontsize=font_size)
+                if text_width > max_width:
+                    font_size = font_size * (max_width / text_width)
+
+            insert_point = fitz.Point(bbox[0], bbox[3] - 1.0)
+
+            page.insert_text(
+                insert_point,
+                en_text,
+                fontsize=font_size,
+                fontname=font_name,
+                fontfile=font_file,
+                color=color,
+            )
+
+    doc.save(OUTPUT_PDF, garbage=4, deflate=True)
+    doc.close()
+    print(f"Translated PDF saved to: {OUTPUT_PDF}")
 
 
 if __name__ == "__main__":
-    build_pdf("/workspace/exchange_rates_translated.pdf")
+    translate_pdf()
